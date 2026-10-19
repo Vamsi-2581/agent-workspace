@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 from .models import Snapshot
+
+logger = logging.getLogger(__name__)
 
 
 def take_snapshot(repo_path: Path, ws_id: str) -> Snapshot:
@@ -20,6 +23,8 @@ def take_snapshot(repo_path: Path, ws_id: str) -> Snapshot:
         ["git", "-C", str(ws.worktree_path), "status", "--porcelain"],
         capture_output=True, text=True, check=False,
     )
+    if result.returncode != 0:
+        logger.warning("git status failed (rc=%d): %s", result.returncode, result.stderr.strip())
     status_lines = result.stdout.strip().splitlines() if result.stdout else []
 
     # Git log
@@ -27,6 +32,8 @@ def take_snapshot(repo_path: Path, ws_id: str) -> Snapshot:
         ["git", "-C", str(ws.worktree_path), "log", "--oneline", "-20"],
         capture_output=True, text=True, check=False,
     )
+    if result.returncode != 0:
+        logger.warning("git log failed (rc=%d): %s", result.returncode, result.stderr.strip())
     log_lines = result.stdout.strip().splitlines() if result.stdout else []
 
     return Snapshot(

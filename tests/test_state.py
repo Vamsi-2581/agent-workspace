@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from pathlib import Path
+import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -45,6 +48,46 @@ def test_take_snapshot(git_repo: Path) -> None:
     assert snap.workspace_id == ws.id
     assert snap.git_status is not None
     assert isinstance(snap.git_log, list)
+
+
+@pytest.mark.parametrize("failed_command", ["status", "log"])
+def test_take_snapshot_warns_on_git_failure(
+    git_repo: Path, caplog: pytest.LogCaptureFixture, failed_command: str,
+) -> None:
+    ws = create_workspace(git_repo, task="failed snapshot")
+    successful = {
+        "status": "?? notes.txt\n",
+        "log": "abc123 initial commit\n",
+    }
+    results = [
+        subprocess.CompletedProcess(
+            args=["git", command],
+            returncode=128 if command == failed_command else 0,
+            stdout="" if command == failed_command else successful[command],
+            stderr="fatal: not a git repository\n" if command == failed_command else "",
+        )
+        for command in ("status", "log")
+    ]
+
+    with patch("agent_workspace.state.subprocess.run", side_effect=results):
+        with caplog.at_level(logging.WARNING, logger="agent_workspace.state"):
+            snap = take_snapshot(git_repo, ws.id)
+
+    assert len(caplog.records) == 1
+    assert f"git {failed_command} failed (rc=128): fatal: not a git repository" in caplog.text
+    assert snap.git_status == {"porcelain": [] if failed_command == "status" else ["?? notes.txt"]}
+    assert snap.git_log == ([] if failed_command == "log" else ["abc123 initial commit"])
+    assert snap.untracked_files == ([] if failed_command == "status" else ["notes.txt"])
+
+
+def test_take_snapshot_does_not_warn_on_success(
+    git_repo: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    ws = create_workspace(git_repo, task="successful snapshot")
+    with caplog.at_level(logging.WARNING, logger="agent_workspace.state"):
+        snap = take_snapshot(git_repo, ws.id)
+    assert snap.git_log
+    assert not caplog.records
 
 
 def test_save_and_load_snapshot(git_repo: Path) -> None:
